@@ -15,4 +15,5 @@ dependencies = [
     "pandas>=2.3.3",
     "pandas-ta>=0.4.71b0",
     "ruff>=0.15.6",
+    "streamlit>=1.55.0",
 ]
