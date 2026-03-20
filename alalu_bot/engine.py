@@ -225,8 +225,8 @@ def check_exits_realtime(symbol, price, portfolio):
 
 # --- PROCESAMIENTO DE CANDLE CERRADA ---
 
-def process_candle(symbol, ohlcv, portfolio, market_state, exchange_ref):
-    df = pd.DataFrame(ohlcv[-120:], columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
+def process_candle(symbol, buf, portfolio, market_state, exchange_ref):
+    df = pd.DataFrame(buf[-120:], columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
 
     df['rsi'] = compute_rsi(df['close'], RSI_PERIOD)
     df['atr'] = compute_atr(df, ATR_PERIOD)
@@ -356,13 +356,30 @@ def process_candle(symbol, ohlcv, portfolio, market_state, exchange_ref):
 # --- LOOPS ASYNC ---
 
 async def watch_symbol_candles(exchange, symbol, portfolio, market_state, lock):
-    last_ts = 0
+    # Bootstrap: obtener historial via REST antes de escuchar WS
+    buf = []
+    try:
+        buf = await exchange.fetch_ohlcv(symbol, '1m', limit=120)
+        print(f"📥 Bootstrap {symbol}: {len(buf)} velas")
+    except Exception as e:
+        print(f"Bootstrap error {symbol}: {e}")
+
+    last_ts = buf[-1][0] if buf else 0
+
     while True:
         try:
-            ohlcv = await exchange.watch_ohlcv(symbol, '1m')
-            if not ohlcv:
+            candles = await exchange.watch_ohlcv(symbol, '1m')
+            if not candles:
                 continue
-            current_ts = ohlcv[-1][0]
+            # Actualizar buffer: reemplazar o agregar vela
+            for candle in candles:
+                if buf and candle[0] == buf[-1][0]:
+                    buf[-1] = candle  # actualizar vela actual
+                else:
+                    buf.append(candle)  # nueva vela
+            buf = buf[-120:]  # mantener solo últimas 120
+
+            current_ts = buf[-1][0]
             if current_ts <= last_ts:
                 continue
             last_ts = current_ts
@@ -376,7 +393,7 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, lock):
                     send("🚨 Circuit breaker activado — bot detenido")
                     print(f"🚨 Circuit breaker activado: balance 5x = ${portfolio['balance_5x']:.2f}")
                     continue
-                process_candle(symbol, ohlcv, portfolio, market_state, exchange)
+                process_candle(symbol, buf, portfolio, market_state, exchange)
         except Exception as e:
             print(f"candle error {symbol}: {e}")
             await asyncio.sleep(5)
