@@ -475,14 +475,24 @@ async def watch_symbol_htf(exchange, symbol, htf_cache, lock):
             await asyncio.sleep(30)
 
 
-async def watch_symbol_ticker(exchange, symbol, portfolio, lock):
+async def watch_symbol_ticker(exchange, symbol, portfolio, market_state, lock):
+    last_save = 0.0
     while True:
         try:
             ticker = await exchange.watch_ticker(symbol)
             price = ticker.get('last')
+            if not price:
+                continue
+            price = float(price)
+            now = asyncio.get_event_loop().time()
             async with lock:
-                if price and symbol in portfolio['active_trades']:
-                    check_exits_realtime(symbol, float(price), portfolio)
+                if symbol in portfolio['active_trades']:
+                    check_exits_realtime(symbol, price, portfolio)
+                if symbol in market_state:
+                    market_state[symbol]['price'] = price
+                    if now - last_save >= 1.0:
+                        save_json(market_state, STATE_FILE)
+                        last_save = now
         except Exception as e:
             log.error(f"ticker error {symbol}: {e}")
             await asyncio.sleep(5)
@@ -513,7 +523,7 @@ async def run_motor():
         await asyncio.gather(
             *[watch_symbol_candles(exchange, s, portfolio, market_state, htf_cache, lock) for s in SYMBOLS],
             *[watch_symbol_htf(exchange, s, htf_cache, lock) for s in SYMBOLS],
-            *[watch_symbol_ticker(exchange, s, portfolio, lock) for s in SYMBOLS],
+            *[watch_symbol_ticker(exchange, s, portfolio, market_state, lock) for s in SYMBOLS],
         )
     except KeyboardInterrupt:
         pass
