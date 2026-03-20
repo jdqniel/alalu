@@ -37,11 +37,21 @@ export interface TradeEntry {
   order_id: string
 }
 
+export interface HistoryEntry {
+  time: string
+  symbol: string
+  direction: 'long' | 'short'
+  pnl_5x: number
+  duration_min: number
+  exit_reason: string
+  type: string
+}
+
 export interface Portfolio {
   balance_1x: number
   balance_5x: number
   active_trades: Record<string, ActiveTrade>
-  history: unknown[]
+  history: HistoryEntry[]
   circuit_breaker: boolean
 }
 
