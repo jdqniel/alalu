@@ -44,7 +44,6 @@ PORTFOLIO_DEFAULT = {
     'balance_1x': 400.0,
     'balance_5x': 400.0,
     'active_trades': {},
-    'history': [],
     'circuit_breaker': False,
 }
 
@@ -55,6 +54,29 @@ def read_json(filename: str, default=None):
         return default if default is not None else {}
     with open(path) as f:
         return json.load(f)
+
+
+# --- Cache de trades: solo re-lee el CSV si el archivo cambió ---
+_trades_cache: list = []
+_trades_mtime: float = 0.0
+
+
+def read_trades() -> list:
+    global _trades_cache, _trades_mtime
+    if not os.path.exists(TRADE_LOG_FILE):
+        return []
+    mtime = os.stat(TRADE_LOG_FILE).st_mtime
+    if mtime == _trades_mtime:
+        return _trades_cache
+    with open(TRADE_LOG_FILE, newline='') as f:
+        _trades_cache = list(csv.DictReader(f))
+    _trades_mtime = mtime
+    return _trades_cache
+
+
+def _slim_portfolio(p: dict) -> dict:
+    """Excluye history del payload SSE — el frontend usa el CSV."""
+    return {k: v for k, v in p.items() if k != 'history'}
 
 
 @app.get("/api/market")
@@ -69,31 +91,24 @@ def portfolio(auth=Depends(require_auth)):
 
 @app.get("/api/trades")
 def trades(auth=Depends(require_auth)):
-    if not os.path.exists(TRADE_LOG_FILE):
-        return []
-    with open(TRADE_LOG_FILE, newline='') as f:
-        return list(csv.DictReader(f))
-
-
-def read_trades():
-    if not os.path.exists(TRADE_LOG_FILE):
-        return []
-    with open(TRADE_LOG_FILE, newline='') as f:
-        return list(csv.DictReader(f))
+    return read_trades()
 
 
 @app.get("/api/stream")
 async def stream(auth=Depends(require_auth)):
     async def event_generator():
-        prev = None
+        prev_sig: str | None = None
         while True:
             market = read_json("market_state.json", default={})
-            portfolio = read_json("portfolio.json", default=PORTFOLIO_DEFAULT)
+            portfolio = _slim_portfolio(
+                read_json("portfolio.json", default=PORTFOLIO_DEFAULT)
+            )
             trades = read_trades()
             payload = {'market': market, 'portfolio': portfolio, 'trades': trades}
-            if payload != prev:
-                yield f"data: {json.dumps(payload)}\n\n"
-                prev = payload
+            sig = json.dumps(payload, separators=(',', ':'))
+            if sig != prev_sig:
+                yield f"data: {sig}\n\n"
+                prev_sig = sig
             await asyncio.sleep(0.5)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

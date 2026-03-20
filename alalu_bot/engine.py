@@ -121,7 +121,7 @@ def in_session() -> bool:
 def save_json(data, filepath):
     dir_name = os.path.dirname(os.path.abspath(filepath))
     with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False, suffix='.tmp') as f:
-        json.dump(data, f, default=str, indent=2)
+        json.dump(data, f, default=str, separators=(',', ':'))
         tmp_path = f.name
     os.replace(tmp_path, filepath)
 
@@ -218,6 +218,8 @@ def _close_trade(symbol, price, portfolio, exit_reason, is_liquidated=False):
         'exit_reason': exit_reason,
         'type': 'LIQ 💀' if is_liquidated else ('WIN ✅' if gain_5x > 0 else 'LOSS ❌'),
     })
+    if len(portfolio['history']) > 200:
+        portfolio['history'] = portfolio['history'][-200:]
     log_trade({
         'symbol': symbol,
         'direction': direction,
@@ -300,6 +302,15 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
     rsi_long_min = p.get('rsi_long_min', RSI_LONG_MIN)
     roc_thresh = p.get('roc_thresh', ROC_THRESH)
     tp_multiplier = p.get('tp_multiplier', TP_MULTIPLIER)
+
+    # Actualizar HTF EMA via resample del buf de 5m (sin WS separado)
+    if len(buf) >= 24:
+        _df_htf = pd.DataFrame(buf, columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
+        _df_htf.index = pd.to_datetime(_df_htf['ts'], unit='ms', utc=True)
+        _htf_close = _df_htf['close'].resample('1h').last().dropna()
+        if len(_htf_close) >= 2:
+            _new_htf = float(_htf_close.ewm(span=HTF_EMA_PERIOD, min_periods=1).mean().iloc[-1])
+            htf_cache[symbol] = _new_htf
 
     # Filtro HTF: solo operar en dirección de la tendencia en 1h
     htf_ema = htf_cache.get(symbol)
@@ -399,10 +410,21 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
 async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_cache, lock):
     buf = []
     try:
-        buf = await exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=120)
+        buf = await exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=300)
         log.info(f"📥 Bootstrap {symbol}: {len(buf)} velas {TIMEFRAME}")
     except Exception as e:
         log.info(f"Bootstrap error {symbol}: {e}")
+
+    buf = buf[-300:]
+
+    try:
+        htf_buf = await exchange.fetch_ohlcv(symbol, HTF_TIMEFRAME, limit=60)
+        htf_df = pd.DataFrame(htf_buf, columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
+        htf_ema_val = float(htf_df['close'].ewm(span=HTF_EMA_PERIOD, min_periods=1).mean().iloc[-1])
+        htf_cache[symbol] = htf_ema_val
+        log.info(f"📥 Bootstrap HTF {symbol}: EMA{HTF_EMA_PERIOD}={htf_ema_val:.2f}")
+    except Exception as e:
+        log.info(f"Bootstrap HTF error {symbol}: {e}")
 
     last_ts = buf[-1][0] if buf else 0
     last_display = 0.0
@@ -417,7 +439,7 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_ca
                     buf[-1] = candle
                 else:
                     buf.append(candle)
-            buf = buf[-120:]
+            buf = buf[-300:]
 
             current_ts = buf[-1][0]
             is_new_candle = current_ts > last_ts
@@ -445,47 +467,6 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_ca
         except Exception as e:
             log.error(f"candle error {symbol}: {e}")
             await asyncio.sleep(5)
-
-
-async def watch_symbol_htf(exchange, symbol, htf_cache, lock):
-    buf = []
-    try:
-        buf = await exchange.fetch_ohlcv(symbol, HTF_TIMEFRAME, limit=60)
-        df = pd.DataFrame(buf, columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
-        ema = compute_ema(df['close'], HTF_EMA_PERIOD).iloc[-1]
-        async with lock:
-            htf_cache[symbol] = float(ema)
-        log.info(f"📥 Bootstrap HTF {symbol}: EMA{HTF_EMA_PERIOD}={ema:.2f}")
-    except Exception as e:
-        log.info(f"Bootstrap HTF error {symbol}: {e}")
-
-    last_ts = buf[-1][0] if buf else 0
-
-    while True:
-        try:
-            candles = await exchange.watch_ohlcv(symbol, HTF_TIMEFRAME)
-            if not candles:
-                continue
-            for candle in candles:
-                if buf and candle[0] == buf[-1][0]:
-                    buf[-1] = candle
-                else:
-                    buf.append(candle)
-            buf = buf[-60:]
-
-            current_ts = buf[-1][0]
-            if current_ts <= last_ts:
-                continue
-            last_ts = current_ts
-
-            df = pd.DataFrame(buf, columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
-            ema = compute_ema(df['close'], HTF_EMA_PERIOD).iloc[-1]
-            async with lock:
-                htf_cache[symbol] = float(ema)
-            log.info(f"📡 HTF {symbol}: EMA{HTF_EMA_PERIOD}={ema:.2f}")
-        except Exception as e:
-            log.error(f"htf error {symbol}: {e}")
-            await asyncio.sleep(30)
 
 
 async def watch_symbol_ticker(exchange, symbol, portfolio, market_state, lock):
@@ -519,7 +500,7 @@ async def run_motor():
     portfolio = load_portfolio()
     market_state = {}
     htf_cache = {}
-    lock = asyncio.Lock()
+    locks = {s: asyncio.Lock() for s in SYMBOLS}
 
     config = {}
     if LIVE_TRADING:
@@ -535,9 +516,8 @@ async def run_motor():
     try:
         portfolio = await reconcile_positions(exchange, portfolio)
         await asyncio.gather(
-            *[watch_symbol_candles(exchange, s, portfolio, market_state, htf_cache, lock) for s in SYMBOLS],
-            *[watch_symbol_htf(exchange, s, htf_cache, lock) for s in SYMBOLS],
-            *[watch_symbol_ticker(exchange, s, portfolio, market_state, lock) for s in SYMBOLS],
+            *[watch_symbol_candles(exchange, s, portfolio, market_state, htf_cache, locks[s]) for s in SYMBOLS],
+            *[watch_symbol_ticker(exchange, s, portfolio, market_state, locks[s]) for s in SYMBOLS],
         )
     except KeyboardInterrupt:
         pass
