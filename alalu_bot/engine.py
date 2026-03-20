@@ -34,6 +34,11 @@ HTF_EMA_PERIOD = 50
 TIMEFRAME = '5m'
 HTF_TIMEFRAME = '1h'
 
+# Filtro de régimen: pausa entradas si el mercado está en bull run parabólico
+# 20% de ROC en 30 días = bull run → suspender nuevas entradas
+BULL_ROC_THRESH = float(os.environ.get('BULL_ROC_THRESH', '0.20'))
+REGIME_REFRESH_HOURS = 6
+
 TRAILING_PCT = 0.015
 INITIAL_SL_PCT = 0.015
 TP_MULTIPLIER = 3.0          # take profit = sl_distance * 3 (optimizado)
@@ -270,7 +275,7 @@ def check_exits_realtime(symbol, price, portfolio):
 
 # --- PROCESAMIENTO DE CANDLE ---
 
-def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref, check_entries=True):
+def process_candle(symbol, buf, portfolio, market_state, htf_cache, regime_cache, exchange_ref, check_entries=True):
     df = pd.DataFrame(buf[-120:], columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
 
     df['rsi'] = compute_rsi(df['close'], RSI_PERIOD)
@@ -336,6 +341,8 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
         and htf_bearish
     )
 
+    regime = regime_cache.get(symbol, 'normal')
+
     now = datetime.now()
     market_state[symbol] = {
         'price': float(price),
@@ -348,6 +355,7 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
         'htf_ema': round(htf_ema, 2) if htf_ema else None,
         'htf_trend': 'bull' if htf_bullish else ('bear' if htf_bearish else None),
         'signal': 'long' if long_signal else ('short' if short_signal else None),
+        'regime': regime,
         'timestamp': now.isoformat(),
     }
 
@@ -363,10 +371,12 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
         if minutes_elapsed >= MAX_TRADE_MINUTES:
             _close_trade(symbol, float(price), portfolio, 'time_exit')
 
-    # Entrada: solo en sesión activa y sin trade abierto en este symbol
+    # Entrada: solo en sesión activa, régimen normal y sin trade abierto en este symbol
     elif len(portfolio['active_trades']) < MAX_CONCURRENT_TRADES:
         signal = 'long' if long_signal else ('short' if short_signal else None)
-        if signal and portfolio['balance_5x'] >= RIESGO_POR_TRADE and in_session():
+        if signal and regime == 'bull_run':
+            log.info(f"⏸ {symbol} en bull run parabólico — entrada suspendida")
+        elif signal and portfolio['balance_5x'] >= RIESGO_POR_TRADE and in_session():
             sl_price = (
                 price * (1 - sl_distance) if signal == 'long'
                 else price * (1 + sl_distance)
@@ -407,7 +417,7 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
 
 # --- LOOPS ASYNC ---
 
-async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_cache, lock):
+async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_cache, regime_cache, lock):
     buf = []
     try:
         buf = await exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=300)
@@ -461,7 +471,7 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_ca
                     send("🚨 Circuit breaker activado — bot detenido")
                     log.warning(f"🚨 Circuit breaker activado: balance 5x = ${portfolio['balance_5x']:.2f}")
                     continue
-                process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange, check_entries=is_new_candle)
+                process_candle(symbol, buf, portfolio, market_state, htf_cache, regime_cache, exchange, check_entries=is_new_candle)
             if should_update_display:
                 last_display = now_loop
         except Exception as e:
@@ -493,6 +503,32 @@ async def watch_symbol_ticker(exchange, symbol, portfolio, market_state, lock):
             await asyncio.sleep(5)
 
 
+# --- RÉGIMEN DE MERCADO ---
+
+async def regime_loop(exchange, regime_cache, lock):
+    """
+    Detecta si el mercado está en bull run parabólico (ROC 30d > BULL_ROC_THRESH).
+    Se actualiza cada REGIME_REFRESH_HOURS horas via REST. No requiere WS.
+    En bull run parabólico: process_candle suspende nuevas entradas.
+    """
+    while True:
+        for symbol in SYMBOLS:
+            try:
+                bars = await exchange.fetch_ohlcv(symbol, '1d', limit=35)
+                if len(bars) < 31:
+                    continue
+                closes = [b[4] for b in bars]
+                roc_30d = (closes[-1] - closes[-31]) / closes[-31]
+                regime = 'bull_run' if roc_30d > BULL_ROC_THRESH else 'normal'
+                async with lock:
+                    regime_cache[symbol] = regime
+                emoji = '🚀' if regime == 'bull_run' else '✅'
+                log.info(f"{emoji} Régimen {symbol}: {regime.upper()} (ROC 30d: {roc_30d*100:.1f}%)")
+            except Exception as e:
+                log.warning(f"regime error {symbol}: {e}")
+        await asyncio.sleep(REGIME_REFRESH_HOURS * 3600)
+
+
 # --- MAIN ---
 
 async def run_motor():
@@ -500,7 +536,9 @@ async def run_motor():
     portfolio = load_portfolio()
     market_state = {}
     htf_cache = {}
+    regime_cache = {}
     locks = {s: asyncio.Lock() for s in SYMBOLS}
+    regime_lock = asyncio.Lock()
 
     config = {}
     if LIVE_TRADING:
@@ -516,7 +554,8 @@ async def run_motor():
     try:
         portfolio = await reconcile_positions(exchange, portfolio)
         await asyncio.gather(
-            *[watch_symbol_candles(exchange, s, portfolio, market_state, htf_cache, locks[s]) for s in SYMBOLS],
+            regime_loop(exchange, regime_cache, regime_lock),
+            *[watch_symbol_candles(exchange, s, portfolio, market_state, htf_cache, regime_cache, locks[s]) for s in SYMBOLS],
             *[watch_symbol_ticker(exchange, s, portfolio, market_state, locks[s]) for s in SYMBOLS],
         )
     except KeyboardInterrupt:

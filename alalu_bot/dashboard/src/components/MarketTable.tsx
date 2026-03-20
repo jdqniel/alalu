@@ -40,7 +40,7 @@ interface Props {
   market: MarketSnapshot
 }
 
-const HEADERS = ['Símbolo', 'Precio', 'ROC %', 'RSI', 'ADX', '+DI', '−DI', 'ATR %', 'HTF', 'Señal']
+const HEADERS = ['Símbolo', 'Precio', 'ROC %', 'RSI', 'ADX', '+DI', '−DI', 'ATR %', 'HTF', 'Régimen', 'Señal']
 
 export default function MarketTable({ market }: Props) {
   return (
@@ -113,7 +113,23 @@ export default function MarketTable({ market }: Props) {
                   </td>
 
                   <td className="px-5 py-3.5">
-                    <SignalBadge signal={data.signal} />
+                    {data.regime === 'bull_run' ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-sm bg-brand-gold/10 text-brand-gold">
+                        🚀 Bull Run
+                      </span>
+                    ) : data.regime === 'normal' ? (
+                      <span className="text-xs text-brand-green font-medium">✅ Normal</span>
+                    ) : (
+                      <span className="text-tx-muted text-xs">—</span>
+                    )}
+                  </td>
+
+                  <td className="px-5 py-3.5">
+                    {data.regime === 'bull_run' ? (
+                      <span className="text-tx-muted text-xs">pausado</span>
+                    ) : (
+                      <SignalBadge signal={data.signal} />
+                    )}
                   </td>
                 </tr>
               )

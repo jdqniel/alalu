@@ -9,6 +9,7 @@ export interface MarketData {
   htf_ema: number | null
   htf_trend: 'bull' | 'bear' | null
   signal: 'long' | 'short' | null
+  regime: 'normal' | 'bull_run' | null
   timestamp: string
 }
 

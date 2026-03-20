@@ -78,24 +78,36 @@ def _ema(series, period):
 
 # --- Fetch histórico ---
 
-def fetch_ohlcv_df(symbol: str, months: int) -> pd.DataFrame:
+def fetch_ohlcv_df(symbol: str, months: int, start: str | None = None, end: str | None = None) -> pd.DataFrame:
     exchange = ccxt.binance({'enableRateLimit': True})
-    since = int((datetime.now(timezone.utc) - timedelta(days=30 * months)).timestamp() * 1000)
+
+    if start:
+        since = int(datetime.strptime(start, '%Y-%m-%d').replace(tzinfo=timezone.utc).timestamp() * 1000)
+    else:
+        since = int((datetime.now(timezone.utc) - timedelta(days=30 * months)).timestamp() * 1000)
+
+    end_ms = None
+    if end:
+        end_ms = int(datetime.strptime(end, '%Y-%m-%d').replace(tzinfo=timezone.utc).timestamp() * 1000)
+
     all_bars = []
     while True:
         bars = exchange.fetch_ohlcv(symbol, '5m', since=since, limit=1000)
         if not bars:
             break
+        if end_ms:
+            bars = [b for b in bars if b[0] <= end_ms]
         all_bars.extend(bars)
-        since = bars[-1][0] + 1
-        if len(bars) < 1000:
+        if len(bars) < 1000 or (end_ms and bars[-1][0] >= end_ms):
             break
+        since = bars[-1][0] + 1
 
     df = pd.DataFrame(all_bars, columns=['ts', 'Open', 'High', 'Low', 'Close', 'Volume'])
     df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
     df.set_index('ts', inplace=True)
     df = df[~df.index.duplicated()]
-    print(f"📊 {symbol} 5m: {len(df)} velas ({months} meses)")
+    label = f"{start} → {end}" if start else f"{months} meses"
+    print(f"📊 {symbol} 5m: {len(df)} velas ({label})")
     return df
 
 
@@ -189,12 +201,13 @@ class MomentumStrategy(Strategy):
 
 # --- Main ---
 
-def run(symbol: str, months: int, plot: bool, optimize: bool):
+def run(symbol: str, months: int, plot: bool, optimize: bool, start: str | None = None, end: str | None = None):
+    label = f"{start} → {end}" if start else f"{months} meses"
     print(f"\n{'='*55}")
-    print(f"  {'Optimización' if optimize else 'Backtest'}: {symbol} | {months} meses | 5m")
+    print(f"  {'Optimización' if optimize else 'Backtest'}: {symbol} | {label} | 5m")
     print(f"{'='*55}\n")
 
-    df = fetch_ohlcv_df(symbol, months)
+    df = fetch_ohlcv_df(symbol, months, start=start, end=end)
 
     bt = Backtest(df, MomentumStrategy, cash=400, commission=0.0004, exclusive_orders=True)
 
@@ -232,7 +245,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--symbol', default='BTC/USDT')
     parser.add_argument('--months', type=int, default=6)
+    parser.add_argument('--start', default=None, help='Fecha inicio YYYY-MM-DD (override --months)')
+    parser.add_argument('--end', default=None, help='Fecha fin YYYY-MM-DD (default: hoy)')
     parser.add_argument('--optimize', action='store_true')
     parser.add_argument('--plot', action='store_true')
     args = parser.parse_args()
-    run(args.symbol, args.months, args.plot, args.optimize)
+    run(args.symbol, args.months, args.plot, args.optimize, start=args.start, end=args.end)
