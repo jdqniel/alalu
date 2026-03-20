@@ -11,9 +11,11 @@ from datetime import datetime, timedelta
 
 import ccxt
 import pandas as pd
-from backtesting import Backtest, Strategy
+from backtesting import Strategy
+from backtesting.lib import FractionalBacktest as Backtest
 
 # --- Mismos parámetros que engine.py ---
+RIESGO_POR_TRADE = 100
 ROC_PERIOD = 20
 RSI_PERIOD = 14
 ADX_PERIOD = 14
@@ -179,14 +181,17 @@ class MomentumStrategy(Strategy):
         if not in_session:
             return
 
+        # Tamaño fijo: RIESGO_POR_TRADE como fracción del equity actual
+        size = min(RIESGO_POR_TRADE / self.equity, 0.99)
+
         if long_signal:
             sl = price * (1 - sl_distance)
             tp = price * (1 + tp_distance)
-            self.buy(sl=sl, tp=tp)
+            self.buy(size=size, sl=sl, tp=tp)
         elif short_signal:
             sl = price * (1 + sl_distance)
             tp = price * (1 - tp_distance)
-            self.sell(sl=sl, tp=tp)
+            self.sell(size=size, sl=sl, tp=tp)
 
 
 # --- Main ---
