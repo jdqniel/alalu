@@ -38,10 +38,19 @@ def require_auth(creds: HTTPBasicCredentials = Depends(security)):
         raise HTTPException(401, headers={"WWW-Authenticate": "Basic"})
 
 
-def read_json(filename: str):
+PORTFOLIO_DEFAULT = {
+    'balance_1x': 400.0,
+    'balance_5x': 400.0,
+    'active_trades': {},
+    'history': [],
+    'circuit_breaker': False,
+}
+
+
+def read_json(filename: str, default=None):
     path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(path):
-        return {}
+        return default if default is not None else {}
     with open(path) as f:
         return json.load(f)
 
@@ -53,7 +62,7 @@ def market(auth=Depends(require_auth)):
 
 @app.get("/api/portfolio")
 def portfolio(auth=Depends(require_auth)):
-    return read_json("portfolio.json")
+    return read_json("portfolio.json", default=PORTFOLIO_DEFAULT)
 
 
 @app.get("/api/trades")
