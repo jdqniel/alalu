@@ -5,6 +5,9 @@ import Navbar from './components/Navbar'
 import MetricCard from './components/MetricCard'
 import MarketTable from './components/MarketTable'
 import PositionsPanel from './components/PositionsPanel'
+import EquityChart from './components/EquityChart'
+import PnlChart from './components/PnlChart'
+import StatsPanel from './components/StatsPanel'
 
 const CAPITAL = 400
 
@@ -31,8 +34,8 @@ export default function App() {
     return () => source.close()
   }, [])
 
-  const totalTrades = portfolio?.history.length ?? 0
-  const wins = portfolio?.history.filter((t) => t.type === 'WIN ✅').length ?? 0
+  const totalTrades = trades.length
+  const wins = trades.filter((t) => parseFloat(t.pnl_usd) > 0).length
   const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0
   const isActive = !loading && !error && !!portfolio && !portfolio.circuit_breaker
 
@@ -78,7 +81,7 @@ export default function App() {
               />
             </div>
 
-            {/* Main Grid */}
+            {/* Market + Positions */}
             <div className="grid grid-cols-5 gap-3">
               <div className="col-span-3">
                 <MarketTable market={market} />
@@ -91,6 +94,19 @@ export default function App() {
                 />
               </div>
             </div>
+
+            {/* Equity Curve + Stats */}
+            <div className="grid grid-cols-5 gap-3">
+              <div className="col-span-3">
+                <EquityChart trades={trades} capital={CAPITAL} />
+              </div>
+              <div className="col-span-2">
+                <StatsPanel trades={trades} capital={CAPITAL} />
+              </div>
+            </div>
+
+            {/* PnL por Trade */}
+            <PnlChart trades={trades} />
           </div>
         </main>
       )}

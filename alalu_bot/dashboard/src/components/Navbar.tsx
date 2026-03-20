@@ -1,3 +1,5 @@
+import SessionBadge from './SessionBadge'
+
 interface NavbarProps {
   isActive: boolean
   circuitBreaker: boolean
@@ -37,10 +39,12 @@ export default function Navbar({ isActive, circuitBreaker, lastUpdated }: Navbar
         </div>
       )}
 
-      <div className="ml-auto flex items-center gap-3 text-tx-muted text-xs font-mono">
-        <span className="text-tx-muted">MOMENTUM · 1m · BTC ETH SOL BNB</span>
+      <div className="ml-auto flex items-center gap-3">
+        <SessionBadge />
         <div className="w-px h-4 bg-line" />
-        <span>{lastUpdated ? lastUpdated.toLocaleTimeString() : '—'}</span>
+        <span className="text-tx-muted text-xs font-mono">
+          {lastUpdated ? lastUpdated.toLocaleTimeString() : '—'}
+        </span>
       </div>
     </nav>
   )

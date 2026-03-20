@@ -74,9 +74,14 @@ export default function PositionsPanel({ activeTrades, trades, market }: Props) 
                       </span>
                       <DirectionBadge direction={trade.direction} />
                     </div>
-                    <span className={`font-num font-bold text-base ${isPos ? 'text-brand-green' : 'text-brand-red'}`}>
-                      {pnl5x >= 0 ? '+' : ''}{pnl5x.toFixed(2)}%
-                    </span>
+                    <div className="text-right">
+                      <p className={`font-num font-bold text-base ${isPos ? 'text-brand-green' : 'text-brand-red'}`}>
+                        {pnl5x >= 0 ? '+' : ''}{pnl5x.toFixed(2)}%
+                      </p>
+                      <p className={`font-num text-xs ${isPos ? 'text-brand-green' : 'text-brand-red'}`}>
+                        {isPos ? '+' : ''}${((pnl5x / 100) * trade.position_usd).toFixed(2)}
+                      </p>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-3 gap-3 text-xs">
