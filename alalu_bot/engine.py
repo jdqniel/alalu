@@ -353,47 +353,43 @@ def process_candle(symbol, ohlcv, portfolio, market_state, exchange_ref):
 
 # --- LOOPS ASYNC ---
 
-async def candle_loop(exchange, portfolio, market_state, lock):
-    last_ts = {s: 0 for s in SYMBOLS}
+async def watch_symbol_candles(exchange, symbol, portfolio, market_state, lock):
+    last_ts = 0
     while True:
         try:
-            updates = await exchange.watch_ohlcv_for_symbols(
-                [[s, '1m'] for s in SYMBOLS]
-            )
-            for symbol, ohlcv in updates.items():
-                if not ohlcv:
-                    continue
-                current_ts = ohlcv[-1][0]
-                if current_ts <= last_ts[symbol]:
-                    continue
-                last_ts[symbol] = current_ts
+            ohlcv = await exchange.watch_ohlcv(symbol, '1m')
+            if not ohlcv:
+                continue
+            current_ts = ohlcv[-1][0]
+            if current_ts <= last_ts:
+                continue
+            last_ts = current_ts
 
-                async with lock:
-                    if portfolio.get('circuit_breaker'):
-                        continue
-                    if portfolio['balance_5x'] < CAPITAL_TOTAL * CIRCUIT_BREAKER_PCT:
-                        portfolio['circuit_breaker'] = True
-                        save_json(portfolio, PORTFOLIO_FILE)
-                        send("🚨 Circuit breaker activado — bot detenido")
-                        print(f"🚨 Circuit breaker activado: balance 5x = ${portfolio['balance_5x']:.2f}")
-                        continue
-                    process_candle(symbol, ohlcv, portfolio, market_state, exchange)
+            async with lock:
+                if portfolio.get('circuit_breaker'):
+                    continue
+                if portfolio['balance_5x'] < CAPITAL_TOTAL * CIRCUIT_BREAKER_PCT:
+                    portfolio['circuit_breaker'] = True
+                    save_json(portfolio, PORTFOLIO_FILE)
+                    send("🚨 Circuit breaker activado — bot detenido")
+                    print(f"🚨 Circuit breaker activado: balance 5x = ${portfolio['balance_5x']:.2f}")
+                    continue
+                process_candle(symbol, ohlcv, portfolio, market_state, exchange)
         except Exception as e:
-            print(f"candle_loop error: {e}")
+            print(f"candle error {symbol}: {e}")
             await asyncio.sleep(5)
 
 
-async def ticker_loop(exchange, portfolio, lock):
+async def watch_symbol_ticker(exchange, symbol, portfolio, lock):
     while True:
         try:
-            tickers = await exchange.watch_tickers(SYMBOLS)
+            ticker = await exchange.watch_ticker(symbol)
+            price = ticker.get('last')
             async with lock:
-                for symbol, ticker in tickers.items():
-                    price = ticker.get('last')
-                    if price and symbol in portfolio['active_trades']:
-                        check_exits_realtime(symbol, float(price), portfolio)
+                if price and symbol in portfolio['active_trades']:
+                    check_exits_realtime(symbol, float(price), portfolio)
         except Exception as e:
-            print(f"ticker_loop error: {e}")
+            print(f"ticker error {symbol}: {e}")
             await asyncio.sleep(5)
 
 
@@ -419,8 +415,8 @@ async def run_motor():
     try:
         portfolio = await reconcile_positions(exchange, portfolio)
         await asyncio.gather(
-            candle_loop(exchange, portfolio, market_state, lock),
-            ticker_loop(exchange, portfolio, lock),
+            *[watch_symbol_candles(exchange, s, portfolio, market_state, lock) for s in SYMBOLS],
+            *[watch_symbol_ticker(exchange, s, portfolio, lock) for s in SYMBOLS],
         )
     except KeyboardInterrupt:
         pass
