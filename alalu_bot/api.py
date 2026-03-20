@@ -83,7 +83,7 @@ def read_trades():
 
 
 @app.get("/api/stream")
-async def stream():
+async def stream(auth=Depends(require_auth)):
     async def event_generator():
         prev = None
         while True:
