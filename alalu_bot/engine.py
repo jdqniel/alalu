@@ -39,12 +39,20 @@ INITIAL_SL_PCT = 0.015
 TP_MULTIPLIER = 3.0          # take profit = sl_distance * 3 (optimizado)
 MAX_TRADE_MINUTES = 120
 
-ADX_THRESH = 25              # optimizado (era 20)
-RSI_LONG_MIN = 52            # optimizado (era 50)
+# Parámetros globales (fallback)
+ADX_THRESH = 25
+RSI_LONG_MIN = 52
 RSI_LONG_MAX = 70
 RSI_SHORT_MIN = 30
 RSI_SHORT_MAX = 50
 ROC_THRESH = 0.005
+TP_MULT_DEFAULT = TP_MULTIPLIER
+
+# Parámetros por símbolo — optimizados via grid search
+SYMBOL_PARAMS = {
+    'BTC/USDT': {'adx_thresh': 25, 'rsi_long_min': 52, 'roc_thresh': 0.005, 'tp_multiplier': 3.0},
+    'ETH/USDT': {'adx_thresh': 18, 'rsi_long_min': 52, 'roc_thresh': 0.007, 'tp_multiplier': 2.5},
+}
 
 MAX_CONCURRENT_TRADES = 2
 CIRCUIT_BREAKER_PCT = 0.80
@@ -286,24 +294,31 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
     atr_pct = atr / price
     sl_distance = max(INITIAL_SL_PCT, float(atr_pct) * 1.5)
 
+    # Parámetros específicos por símbolo
+    p = SYMBOL_PARAMS.get(symbol, {})
+    adx_thresh = p.get('adx_thresh', ADX_THRESH)
+    rsi_long_min = p.get('rsi_long_min', RSI_LONG_MIN)
+    roc_thresh = p.get('roc_thresh', ROC_THRESH)
+    tp_multiplier = p.get('tp_multiplier', TP_MULTIPLIER)
+
     # Filtro HTF: solo operar en dirección de la tendencia en 1h
     htf_ema = htf_cache.get(symbol)
     htf_bullish = htf_ema is not None and float(price) > htf_ema
     htf_bearish = htf_ema is not None and float(price) < htf_ema
 
-    trending = not pd.isna(adx) and adx > ADX_THRESH
+    trending = not pd.isna(adx) and adx > adx_thresh
 
     long_signal = (
         trending
-        and not pd.isna(roc) and roc > ROC_THRESH
-        and not pd.isna(rsi) and RSI_LONG_MIN < rsi < RSI_LONG_MAX
+        and not pd.isna(roc) and roc > roc_thresh
+        and not pd.isna(rsi) and rsi_long_min < rsi < RSI_LONG_MAX
         and plus_di > minus_di
         and vol_surge
         and htf_bullish
     )
     short_signal = (
         trending
-        and not pd.isna(roc) and roc < -ROC_THRESH
+        and not pd.isna(roc) and roc < -roc_thresh
         and not pd.isna(rsi) and RSI_SHORT_MIN < rsi < RSI_SHORT_MAX
         and minus_di > plus_di
         and vol_surge
@@ -342,8 +357,8 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
                 else price * (1 + sl_distance)
             )
             tp_price = (
-                price * (1 + sl_distance * TP_MULTIPLIER) if signal == 'long'
-                else price * (1 - sl_distance * TP_MULTIPLIER)
+                price * (1 + sl_distance * tp_multiplier) if signal == 'long'
+                else price * (1 - sl_distance * tp_multiplier)
             )
             portfolio['active_trades'][symbol] = {
                 'entry_price': float(price),
