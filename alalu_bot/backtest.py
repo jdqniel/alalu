@@ -1,20 +1,25 @@
 """
-Backtesting de la estrategia de momentum.
+Backtesting y optimización de la estrategia de momentum.
 
 Uso:
-    uv run python alalu_bot/backtest.py                        # BTC/USDT, 6 meses
+    uv run python alalu_bot/backtest.py                   # BTC/USDT, 6 meses
     uv run python alalu_bot/backtest.py --symbol ETH/USDT --months 3
-    uv run python alalu_bot/backtest.py --plot               # abre gráfico interactivo
+    uv run python alalu_bot/backtest.py --optimize        # grid search de parámetros
+    uv run python alalu_bot/backtest.py --plot            # gráfico interactivo
 """
 import argparse
-from datetime import datetime, timedelta
+import math
+import warnings
+from datetime import datetime, timedelta, timezone
 
 import ccxt
 import pandas as pd
 from backtesting import Strategy
 from backtesting.lib import FractionalBacktest as Backtest
 
-# --- Mismos parámetros que engine.py ---
+warnings.filterwarnings('ignore')
+
+# --- Parámetros base (mismos que engine.py) ---
 RIESGO_POR_TRADE = 100
 ROC_PERIOD = 20
 RSI_PERIOD = 14
@@ -22,17 +27,7 @@ ADX_PERIOD = 14
 ATR_PERIOD = 14
 HTF_EMA_PERIOD = 50
 
-TRAILING_PCT = 0.015
 INITIAL_SL_PCT = 0.015
-TP_MULTIPLIER = 2.0
-
-ADX_THRESH = 20
-RSI_LONG_MIN = 50
-RSI_LONG_MAX = 70
-RSI_SHORT_MIN = 30
-RSI_SHORT_MAX = 50
-ROC_THRESH = 0.005
-
 SESSION_START_UTC = 13
 SESSION_END_UTC = 21
 
@@ -67,8 +62,7 @@ def _adx(df, period=14):
     minus_di = 100 * minus_dm.ewm(com=period - 1, min_periods=period).mean() / atr
     di_sum = (plus_di + minus_di).replace(0, float('nan'))
     dx = 100 * (plus_di - minus_di).abs() / di_sum
-    adx = dx.ewm(com=period - 1, min_periods=period).mean()
-    return adx, plus_di, minus_di
+    return dx.ewm(com=period - 1, min_periods=period).mean(), plus_di, minus_di
 
 
 def _ema(series, period):
@@ -77,12 +71,12 @@ def _ema(series, period):
 
 # --- Fetch histórico ---
 
-def fetch_ohlcv_df(symbol: str, timeframe: str, months: int) -> pd.DataFrame:
+def fetch_ohlcv_df(symbol: str, months: int) -> pd.DataFrame:
     exchange = ccxt.binance({'enableRateLimit': True})
-    since = int((datetime.utcnow() - timedelta(days=30 * months)).timestamp() * 1000)
+    since = int((datetime.now(timezone.utc) - timedelta(days=30 * months)).timestamp() * 1000)
     all_bars = []
     while True:
-        bars = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
+        bars = exchange.fetch_ohlcv(symbol, '5m', since=since, limit=1000)
         if not bars:
             break
         all_bars.extend(bars)
@@ -94,28 +88,25 @@ def fetch_ohlcv_df(symbol: str, timeframe: str, months: int) -> pd.DataFrame:
     df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
     df.set_index('ts', inplace=True)
     df = df[~df.index.duplicated()]
-    print(f"📊 {symbol} {timeframe}: {len(df)} velas ({months} meses)")
+    print(f"📊 {symbol} 5m: {len(df)} velas ({months} meses)")
     return df
 
 
-def fetch_htf_ema(symbol: str, timeframe: str = '1h', period: int = 50) -> pd.Series:
-    exchange = ccxt.binance({'enableRateLimit': True})
-    bars = exchange.fetch_ohlcv(symbol, timeframe, limit=period * 3)
-    df = pd.DataFrame(bars, columns=['ts', 'Open', 'High', 'Low', 'Close', 'Volume'])
-    df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
-    df.set_index('ts', inplace=True)
-    return _ema(df['Close'], period).resample('5min').ffill()
-
-
-# --- Estrategia ---
+# --- Estrategia con parámetros optimizables ---
 
 class MomentumStrategy(Strategy):
+    # Parámetros optimizables (class-level para bt.optimize)
+    adx_thresh = 20
+    rsi_long_min = 50
+    rsi_long_max = 70
+    roc_thresh_bp = 5      # en basis points: 5 = 0.5%, 8 = 0.8%
+    tp_mult_x10 = 20       # multiplicado x10: 20 = 2.0x, 25 = 2.5x
+
     def init(self):
         close = pd.Series(self.data.Close, index=self.data.df.index)
         high = pd.Series(self.data.High, index=self.data.df.index)
         low = pd.Series(self.data.Low, index=self.data.df.index)
         vol = pd.Series(self.data.Volume, index=self.data.df.index)
-
         df = pd.DataFrame({'High': high, 'Low': low, 'Close': close, 'Volume': vol})
 
         rsi = _rsi(close, RSI_PERIOD)
@@ -123,99 +114,108 @@ class MomentumStrategy(Strategy):
         adx, plus_di, minus_di = _adx(df, ADX_PERIOD)
         roc = close.pct_change(ROC_PERIOD)
         vol_avg = vol.rolling(20).mean()
-        htf_ema = _ema(close.resample('1h').last().reindex(close.index, method='ffill'), HTF_EMA_PERIOD)
+        htf_ema = _ema(
+            close.resample('1h').last().reindex(close.index, method='ffill'),
+            HTF_EMA_PERIOD,
+        )
 
-        self.rsi = self.I(lambda: rsi.values, name='RSI')
-        self.adx = self.I(lambda: adx.values, name='ADX')
-        self.plus_di = self.I(lambda: plus_di.values, name='+DI')
-        self.minus_di = self.I(lambda: minus_di.values, name='-DI')
-        self.roc = self.I(lambda: roc.values, name='ROC')
-        self.vol = self.I(lambda: vol.values, name='Vol')
-        self.vol_avg = self.I(lambda: vol_avg.values, name='VolAvg')
-        self.atr = self.I(lambda: atr.values, name='ATR')
-        self.htf_ema = self.I(lambda: htf_ema.values, name='HTF_EMA')
+        self._rsi = self.I(lambda: rsi.values, name='RSI', overlay=False)
+        self._adx = self.I(lambda: adx.values, name='ADX', overlay=False)
+        self._plus_di = self.I(lambda: plus_di.values, name='+DI', overlay=False)
+        self._minus_di = self.I(lambda: minus_di.values, name='-DI', overlay=False)
+        self._roc = self.I(lambda: roc.values, name='ROC', overlay=False)
+        self._vol = self.I(lambda: vol.values, name='Vol', overlay=False)
+        self._vol_avg = self.I(lambda: vol_avg.values, name='VolAvg', overlay=False)
+        self._atr = self.I(lambda: atr.values, name='ATR', overlay=False)
+        self._htf_ema = self.I(lambda: htf_ema.values, name='HTF_EMA', overlay=True)
 
     def next(self):
         price = self.data.Close[-1]
-        rsi = self.rsi[-1]
-        adx = self.adx[-1]
-        plus_di = self.plus_di[-1]
-        minus_di = self.minus_di[-1]
-        roc = self.roc[-1]
-        vol = self.vol[-1]
-        vol_avg = self.vol_avg[-1]
-        atr = self.atr[-1]
-        htf_ema = self.htf_ema[-1]
+        rsi = self._rsi[-1]
+        adx = self._adx[-1]
+        plus_di = self._plus_di[-1]
+        minus_di = self._minus_di[-1]
+        roc = self._roc[-1]
+        vol = self._vol[-1]
+        vol_avg = self._vol_avg[-1]
+        atr = self._atr[-1]
+        htf_ema = self._htf_ema[-1]
 
-        import math
         if any(math.isnan(x) for x in [rsi, adx, roc, vol_avg, htf_ema]):
             return
 
+        roc_thresh = self.roc_thresh_bp / 1000
+        tp_multiplier = self.tp_mult_x10 / 10
+
         vol_surge = vol > vol_avg
-        trending = adx > ADX_THRESH
+        trending = adx > self.adx_thresh
         atr_pct = atr / price
         sl_distance = max(INITIAL_SL_PCT, atr_pct * 1.5)
-        tp_distance = sl_distance * TP_MULTIPLIER
 
         htf_bullish = price > htf_ema
         htf_bearish = price < htf_ema
 
-        # Session filter
         hour = self.data.index[-1].hour
         in_session = SESSION_START_UTC <= hour < SESSION_END_UTC
 
         long_signal = (
-            trending and roc > ROC_THRESH
-            and RSI_LONG_MIN < rsi < RSI_LONG_MAX
+            trending and roc > roc_thresh
+            and self.rsi_long_min < rsi < self.rsi_long_max
             and plus_di > minus_di and vol_surge and htf_bullish
         )
         short_signal = (
-            trending and roc < -ROC_THRESH
-            and RSI_SHORT_MIN < rsi < RSI_SHORT_MAX
+            trending and roc < -roc_thresh
+            and 100 - self.rsi_long_max < rsi < 100 - self.rsi_long_min
             and minus_di > plus_di and vol_surge and htf_bearish
         )
 
-        if self.position:
-            return  # exits gestionados por sl/tp de backtesting.py
-
-        if not in_session:
+        if self.position or not in_session:
             return
 
-        # Tamaño fijo: RIESGO_POR_TRADE como fracción del equity actual
         size = min(RIESGO_POR_TRADE / self.equity, 0.99)
 
         if long_signal:
-            sl = price * (1 - sl_distance)
-            tp = price * (1 + tp_distance)
-            self.buy(size=size, sl=sl, tp=tp)
+            self.buy(size=size, sl=price * (1 - sl_distance), tp=price * (1 + sl_distance * tp_multiplier))
         elif short_signal:
-            sl = price * (1 + sl_distance)
-            tp = price * (1 - tp_distance)
-            self.sell(size=size, sl=sl, tp=tp)
+            self.sell(size=size, sl=price * (1 + sl_distance), tp=price * (1 - sl_distance * tp_multiplier))
 
 
 # --- Main ---
 
-def run(symbol: str, months: int, plot: bool):
-    print(f"\n{'='*50}")
-    print(f"Backtesting: {symbol} | {months} meses | 5m")
-    print(f"{'='*50}\n")
+def run(symbol: str, months: int, plot: bool, optimize: bool):
+    print(f"\n{'='*55}")
+    print(f"  {'Optimización' if optimize else 'Backtest'}: {symbol} | {months} meses | 5m")
+    print(f"{'='*55}\n")
 
-    df = fetch_ohlcv_df(symbol, '5m', months)
+    df = fetch_ohlcv_df(symbol, months)
 
-    bt = Backtest(
-        df,
-        MomentumStrategy,
-        cash=400,
-        commission=0.0004,
-        exclusive_orders=True,
-    )
-    stats = bt.run()
+    bt = Backtest(df, MomentumStrategy, cash=400, commission=0.0004, exclusive_orders=True)
 
-    print(stats[['Start', 'End', 'Duration', 'Exposure Time [%]',
-                  'Return [%]', 'Buy & Hold Return [%]', 'Max. Drawdown [%]',
-                  'Win Rate [%]', '# Trades', 'Avg. Trade Duration',
-                  'Profit Factor', 'Sharpe Ratio']].to_string())
+    if optimize:
+        print("🔍 Corriendo grid search... (puede tardar 2-5 min)\n")
+        stats, heatmap = bt.optimize(
+            adx_thresh=[18, 20, 22, 25],
+            rsi_long_min=[48, 50, 52, 55],
+            roc_thresh_bp=[4, 5, 7, 10],
+            tp_mult_x10=[15, 20, 25, 30],
+            maximize='Profit Factor',
+            return_heatmap=True,
+        )
+        print("🏆 Mejores parámetros encontrados:")
+        print(f"   adx_thresh    = {stats._strategy.adx_thresh}")
+        print(f"   rsi_long_min  = {stats._strategy.rsi_long_min}")
+        print(f"   roc_thresh    = {stats._strategy.roc_thresh_bp / 1000:.3f} ({stats._strategy.roc_thresh_bp} bp)")
+        print(f"   tp_multiplier = {stats._strategy.tp_mult_x10 / 10:.1f}x")
+        print()
+    else:
+        stats = bt.run()
+
+    cols = [
+        'Return [%]', 'Buy & Hold Return [%]', 'Max. Drawdown [%]',
+        'Win Rate [%]', '# Trades', 'Avg. Trade Duration',
+        'Profit Factor', 'Sharpe Ratio', 'Exposure Time [%]',
+    ]
+    print(stats[cols].to_string())
 
     if plot:
         bt.plot()
@@ -225,6 +225,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--symbol', default='BTC/USDT')
     parser.add_argument('--months', type=int, default=6)
+    parser.add_argument('--optimize', action='store_true')
     parser.add_argument('--plot', action='store_true')
     args = parser.parse_args()
-    run(args.symbol, args.months, args.plot)
+    run(args.symbol, args.months, args.plot, args.optimize)

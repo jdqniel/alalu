@@ -36,11 +36,11 @@ HTF_TIMEFRAME = '1h'
 
 TRAILING_PCT = 0.015
 INITIAL_SL_PCT = 0.015
-TP_MULTIPLIER = 2.0          # take profit = sl_distance * 2
+TP_MULTIPLIER = 3.0          # take profit = sl_distance * 3 (optimizado)
 MAX_TRADE_MINUTES = 120
 
-ADX_THRESH = 20
-RSI_LONG_MIN = 50
+ADX_THRESH = 25              # optimizado (era 20)
+RSI_LONG_MIN = 52            # optimizado (era 50)
 RSI_LONG_MAX = 70
 RSI_SHORT_MIN = 30
 RSI_SHORT_MAX = 50
