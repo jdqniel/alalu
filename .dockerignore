@@ -1,0 +1,12 @@
+.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pkl
+*.csv
+.git/
+.gitignore
+alalu_bot/dashboard/node_modules/
+alalu_bot/dashboard/dist/
+alalu_bot/market_state.json
+alalu_bot/portfolio.json
+README.md

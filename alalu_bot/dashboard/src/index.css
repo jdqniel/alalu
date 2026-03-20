@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0B0E11;
+  color: #EAECEF;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-num {
+  font-family: 'Space Grotesk', monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.blink {
+  animation: blink 1.8s ease-in-out infinite;
+}
+
+/* Thin scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #161A1E;
+}
+::-webkit-scrollbar-thumb {
+  background: #2B3139;
+  border-radius: 2px;
+}
