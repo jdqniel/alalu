@@ -12,3 +12,6 @@ wheels/
 # Secrets
 .env
 secrets/
+
+# Datos persistentes del bot (trades, portfolio, market state)
+data/

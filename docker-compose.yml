@@ -7,7 +7,7 @@ services:
     environment:
       DATA_DIR: /app/data
     volumes:
-      - bot-data:/app/data
+      - ./data:/app/data
     restart: unless-stopped
 
   api:
@@ -18,7 +18,7 @@ services:
     environment:
       DATA_DIR: /app/data
     volumes:
-      - bot-data:/app/data
+      - ./data:/app/data
     restart: unless-stopped
     depends_on:
       - engine
@@ -30,6 +30,3 @@ services:
     restart: unless-stopped
     depends_on:
       - api
-
-volumes:
-  bot-data:
