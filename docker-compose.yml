@@ -1,7 +1,8 @@
 services:
   engine:
     build: .
-    command: python alalu_bot/engine.py
+    command: python engine.py
+    working_dir: /app/alalu_bot
     env_file: .env
     environment:
       DATA_DIR: /app/data
