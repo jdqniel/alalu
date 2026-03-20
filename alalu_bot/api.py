@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import json
 import os
@@ -5,6 +6,7 @@ import secrets
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 app = FastAPI()
@@ -71,3 +73,19 @@ def trades(auth=Depends(require_auth)):
         return []
     with open(TRADE_LOG_FILE, newline='') as f:
         return list(csv.DictReader(f))
+
+
+@app.get("/api/stream")
+async def stream():
+    async def event_generator():
+        prev = None
+        while True:
+            market = read_json("market_state.json", default={})
+            portfolio = read_json("portfolio.json", default=PORTFOLIO_DEFAULT)
+            payload = {'market': market, 'portfolio': portfolio}
+            if payload != prev:
+                yield f"data: {json.dumps(payload)}\n\n"
+                prev = payload
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

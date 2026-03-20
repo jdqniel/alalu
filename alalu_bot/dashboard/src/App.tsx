@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react'
-import { fetchMarket, fetchPortfolio } from './api'
+import { useEffect, useState } from 'react'
+import { openStream } from './api'
 import type { MarketSnapshot, Portfolio } from './types'
 import Navbar from './components/Navbar'
 import MetricCard from './components/MetricCard'
@@ -7,7 +7,6 @@ import MarketTable from './components/MarketTable'
 import PositionsPanel from './components/PositionsPanel'
 
 const CAPITAL = 400
-const POLL_MS = 5000
 
 export default function App() {
   const [market, setMarket] = useState<MarketSnapshot>({})
@@ -16,24 +15,19 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
 
-  const refresh = useCallback(async () => {
-    try {
-      const [m, p] = await Promise.all([fetchMarket(), fetchPortfolio()])
-      setMarket(m)
-      setPortfolio(p)
-      setLastUpdated(new Date())
-      setLoading(false)
-      setError(false)
-    } catch {
-      setError(true)
-    }
-  }, [])
-
   useEffect(() => {
-    refresh()
-    const id = setInterval(refresh, POLL_MS)
-    return () => clearInterval(id)
-  }, [refresh])
+    const source = openStream(
+      ({ market: m, portfolio: p }) => {
+        setMarket(m)
+        setPortfolio(p)
+        setLastUpdated(new Date())
+        setLoading(false)
+        setError(false)
+      },
+      () => setError(true),
+    )
+    return () => source.close()
+  }, [])
 
   const totalTrades = portfolio?.history.length ?? 0
   const wins = portfolio?.history.filter((t) => t.type === 'WIN ✅').length ?? 0

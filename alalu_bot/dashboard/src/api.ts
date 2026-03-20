@@ -1,13 +1,17 @@
 import type { MarketSnapshot, Portfolio } from './types'
 
-export async function fetchMarket(): Promise<MarketSnapshot> {
-  const res = await fetch('/api/market')
-  if (!res.ok) throw new Error('market fetch failed')
-  return res.json()
-}
+export type StreamPayload = { market: MarketSnapshot; portfolio: Portfolio }
 
-export async function fetchPortfolio(): Promise<Portfolio> {
-  const res = await fetch('/api/portfolio')
-  if (!res.ok) throw new Error('portfolio fetch failed')
-  return res.json()
+export function openStream(
+  onData: (payload: StreamPayload) => void,
+  onError: () => void,
+): EventSource {
+  const source = new EventSource('/api/stream')
+  source.onmessage = (e) => {
+    try {
+      onData(JSON.parse(e.data))
+    } catch {}
+  }
+  source.onerror = onError
+  return source
 }
