@@ -266,9 +266,9 @@ def check_exits_realtime(symbol, price, portfolio):
             _close_trade(symbol, price, portfolio, 'liquidation' if is_liquidated else ('trailing_stop' if pnl_pct > 0 else 'stop_loss'), is_liquidated)
 
 
-# --- PROCESAMIENTO DE CANDLE CERRADA ---
+# --- PROCESAMIENTO DE CANDLE ---
 
-def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref):
+def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref, check_entries=True):
     df = pd.DataFrame(buf[-120:], columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
 
     df['rsi'] = compute_rsi(df['close'], RSI_PERIOD)
@@ -340,6 +340,10 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
         'timestamp': now.isoformat(),
     }
 
+    if not check_entries:
+        save_json(market_state, STATE_FILE)
+        return
+
     # Time exit
     if symbol in portfolio['active_trades']:
         trade = portfolio['active_trades'][symbol]
@@ -401,6 +405,7 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_ca
         log.info(f"Bootstrap error {symbol}: {e}")
 
     last_ts = buf[-1][0] if buf else 0
+    last_display = 0.0
 
     while True:
         try:
@@ -415,9 +420,15 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_ca
             buf = buf[-120:]
 
             current_ts = buf[-1][0]
-            if current_ts <= last_ts:
+            is_new_candle = current_ts > last_ts
+            now_loop = asyncio.get_event_loop().time()
+            should_update_display = now_loop - last_display >= 3.0
+
+            if not is_new_candle and not should_update_display:
                 continue
-            last_ts = current_ts
+
+            if is_new_candle:
+                last_ts = current_ts
 
             async with lock:
                 if portfolio.get('circuit_breaker'):
@@ -428,7 +439,9 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_ca
                     send("🚨 Circuit breaker activado — bot detenido")
                     log.warning(f"🚨 Circuit breaker activado: balance 5x = ${portfolio['balance_5x']:.2f}")
                     continue
-                process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange)
+                process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange, check_entries=is_new_candle)
+            if should_update_display:
+                last_display = now_loop
         except Exception as e:
             log.error(f"candle error {symbol}: {e}")
             await asyncio.sleep(5)
@@ -490,6 +503,7 @@ async def watch_symbol_ticker(exchange, symbol, portfolio, market_state, lock):
                     check_exits_realtime(symbol, price, portfolio)
                 if symbol in market_state:
                     market_state[symbol]['price'] = price
+                    market_state[symbol]['timestamp'] = datetime.now().isoformat()
                     if now - last_save >= 1.0:
                         save_json(market_state, STATE_FILE)
                         last_save = now
