@@ -9,8 +9,15 @@ Uso:
 """
 import argparse
 import math
+import resource
 import warnings
 from datetime import datetime, timedelta, timezone
+
+# macOS limita file descriptors a 256 por defecto — multiprocessing los agota
+try:
+    resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 4096))
+except Exception:
+    pass
 
 import ccxt
 import pandas as pd
