@@ -75,6 +75,13 @@ def trades(auth=Depends(require_auth)):
         return list(csv.DictReader(f))
 
 
+def read_trades():
+    if not os.path.exists(TRADE_LOG_FILE):
+        return []
+    with open(TRADE_LOG_FILE, newline='') as f:
+        return list(csv.DictReader(f))
+
+
 @app.get("/api/stream")
 async def stream():
     async def event_generator():
@@ -82,7 +89,8 @@ async def stream():
         while True:
             market = read_json("market_state.json", default={})
             portfolio = read_json("portfolio.json", default=PORTFOLIO_DEFAULT)
-            payload = {'market': market, 'portfolio': portfolio}
+            trades = read_trades()
+            payload = {'market': market, 'portfolio': portfolio, 'trades': trades}
             if payload != prev:
                 yield f"data: {json.dumps(payload)}\n\n"
                 prev = payload

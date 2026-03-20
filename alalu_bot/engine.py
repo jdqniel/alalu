@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import json
 import tempfile
@@ -9,6 +10,13 @@ import pandas as pd
 
 from notify import send
 from trade_log import log_trade
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+    datefmt='%H:%M:%S',
+)
+log = logging.getLogger('alalu')
 
 # --- CONFIG ---
 SYMBOLS = ['BTC/USDT', 'ETH/USDT']
@@ -136,13 +144,13 @@ async def execute_order(exchange, symbol, side, amount_usd, price):
     try:
         return await exchange.create_market_order(symbol, side, amount)
     except ccxtpro.InsufficientFunds:
-        print(f"FONDOS INSUFICIENTES {symbol}")
+        log.error(f"FONDOS INSUFICIENTES {symbol}")
         return None
     except ccxtpro.RateLimitExceeded:
         await asyncio.sleep(30)
         return None
     except Exception as e:
-        print(f"ORDER ERROR {symbol}: {e}")
+        log.error(f"ORDER ERROR {symbol}: {e}")
         return None
 
 
@@ -155,13 +163,13 @@ async def reconcile_positions(exchange, portfolio):
         balance = await exchange.fetch_balance()
         open_assets = {k for k, v in balance['total'].items() if v > 0.0001 and k != 'USDT'}
     except Exception as e:
-        print(f"RECONCILE ERROR: {e}")
+        log.warning(f"RECONCILE ERROR: {e}")
         return portfolio
 
     for symbol in list(portfolio['active_trades'].keys()):
         base = symbol.split('/')[0]
         if base not in open_assets:
-            print(f"RECONCILE: {symbol} en dict pero no en exchange — limpiando")
+            log.warning(f"RECONCILE: {symbol} en dict pero no en exchange — limpiando")
             del portfolio['active_trades'][symbol]
     return portfolio
 
@@ -215,7 +223,7 @@ def _close_trade(symbol, price, portfolio, exit_reason, is_liquidated=False):
     })
     emoji = '💀' if is_liquidated else ('🎯' if exit_reason == 'take_profit' else '🔚')
     send(f"{emoji} Exit {symbol} | {direction.upper()} | PnL 5x: ${gain_5x:.2f} | {exit_reason}")
-    print(f"{emoji} Exit {symbol} | {direction.upper()} | PnL 5x: ${gain_5x:.2f} | {exit_reason}")
+    log.info(f"{emoji} Exit {symbol} | {direction.upper()} | PnL 5x: ${gain_5x:.2f} | {exit_reason}")
     del portfolio['active_trades'][symbol]
 
 
@@ -353,18 +361,18 @@ def process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange_ref
                 f"📊 {signal.upper()} {symbol} @ {price:.4f} | "
                 f"SL={sl_price:.4f} TP={tp_price:.4f} | ADX={adx:.1f} | RSI={rsi:.1f}"
             )
-            print(
+            log.info(
                 f"📊 {signal.upper()} {symbol} @ {price:.4f} | "
                 f"SL={sl_price:.4f} TP={tp_price:.4f} | ADX={adx:.1f} | RSI={rsi:.1f} | ROC={roc*100:.2f}%"
             )
         elif signal and not in_session():
-            print(f"⏸ Señal {signal.upper()} {symbol} fuera de sesión — ignorada")
+            log.info(f"⏸ Señal {signal.upper()} {symbol} fuera de sesión — ignorada")
 
     save_json(market_state, STATE_FILE)
     save_json(portfolio, PORTFOLIO_FILE)
     htf_str = f"HTF={'▲' if htf_bullish else '▼'}" if htf_ema else "HTF=—"
     signal_str = market_state[symbol].get('signal') or '—'
-    print(f"🕯 {symbol} @ {float(price):.2f} | RSI={safe_float(rsi, decimals=1)} ADX={safe_float(adx, decimals=1)} | {htf_str} | {signal_str}")
+    log.info(f"🕯 {symbol} @ {float(price):.2f} | RSI={safe_float(rsi, decimals=1)} ADX={safe_float(adx, decimals=1)} | {htf_str} | {signal_str}")
 
 
 # --- LOOPS ASYNC ---
@@ -373,9 +381,9 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_ca
     buf = []
     try:
         buf = await exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=120)
-        print(f"📥 Bootstrap {symbol}: {len(buf)} velas {TIMEFRAME}")
+        log.info(f"📥 Bootstrap {symbol}: {len(buf)} velas {TIMEFRAME}")
     except Exception as e:
-        print(f"Bootstrap error {symbol}: {e}")
+        log.info(f"Bootstrap error {symbol}: {e}")
 
     last_ts = buf[-1][0] if buf else 0
 
@@ -403,11 +411,11 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, htf_ca
                     portfolio['circuit_breaker'] = True
                     save_json(portfolio, PORTFOLIO_FILE)
                     send("🚨 Circuit breaker activado — bot detenido")
-                    print(f"🚨 Circuit breaker activado: balance 5x = ${portfolio['balance_5x']:.2f}")
+                    log.warning(f"🚨 Circuit breaker activado: balance 5x = ${portfolio['balance_5x']:.2f}")
                     continue
                 process_candle(symbol, buf, portfolio, market_state, htf_cache, exchange)
         except Exception as e:
-            print(f"candle error {symbol}: {e}")
+            log.error(f"candle error {symbol}: {e}")
             await asyncio.sleep(5)
 
 
@@ -419,9 +427,9 @@ async def watch_symbol_htf(exchange, symbol, htf_cache, lock):
         ema = compute_ema(df['close'], HTF_EMA_PERIOD).iloc[-1]
         async with lock:
             htf_cache[symbol] = float(ema)
-        print(f"📥 Bootstrap HTF {symbol}: EMA{HTF_EMA_PERIOD}={ema:.2f}")
+        log.info(f"📥 Bootstrap HTF {symbol}: EMA{HTF_EMA_PERIOD}={ema:.2f}")
     except Exception as e:
-        print(f"Bootstrap HTF error {symbol}: {e}")
+        log.info(f"Bootstrap HTF error {symbol}: {e}")
 
     last_ts = buf[-1][0] if buf else 0
 
@@ -446,9 +454,9 @@ async def watch_symbol_htf(exchange, symbol, htf_cache, lock):
             ema = compute_ema(df['close'], HTF_EMA_PERIOD).iloc[-1]
             async with lock:
                 htf_cache[symbol] = float(ema)
-            print(f"📡 HTF {symbol}: EMA{HTF_EMA_PERIOD}={ema:.2f}")
+            log.info(f"📡 HTF {symbol}: EMA{HTF_EMA_PERIOD}={ema:.2f}")
         except Exception as e:
-            print(f"htf error {symbol}: {e}")
+            log.error(f"htf error {symbol}: {e}")
             await asyncio.sleep(30)
 
 
@@ -461,7 +469,7 @@ async def watch_symbol_ticker(exchange, symbol, portfolio, lock):
                 if price and symbol in portfolio['active_trades']:
                     check_exits_realtime(symbol, float(price), portfolio)
         except Exception as e:
-            print(f"ticker error {symbol}: {e}")
+            log.error(f"ticker error {symbol}: {e}")
             await asyncio.sleep(5)
 
 
@@ -483,7 +491,7 @@ async def run_motor():
         }
 
     exchange = ccxtpro.binance(config)
-    print(f"🚀 Motor iniciado. LIVE_TRADING={LIVE_TRADING}. Sesión: {SESSION_START_UTC}-{SESSION_END_UTC} UTC. Data dir: {DATA_DIR}")
+    log.info(f"🚀 Motor iniciado. LIVE_TRADING={LIVE_TRADING}. Sesión: {SESSION_START_UTC}-{SESSION_END_UTC} UTC. Data dir: {DATA_DIR}")
 
     try:
         portfolio = await reconcile_positions(exchange, portfolio)

@@ -6,6 +6,8 @@ export interface MarketData {
   plus_di: number | null
   minus_di: number | null
   atr_pct: number | null
+  htf_ema: number | null
+  htf_trend: 'bull' | 'bear' | null
   signal: 'long' | 'short' | null
   timestamp: string
 }
@@ -17,25 +19,29 @@ export interface ActiveTrade {
   position_usd: number
   sl_distance: number
   sl_price: number
+  tp_price: number | null
   highest_price: number
   lowest_price: number
 }
 
-export interface HistoryEntry {
-  time: string
+export interface TradeEntry {
+  timestamp: string
   symbol: string
   direction: 'long' | 'short'
-  pnl_5x: number
-  duration_min: number
+  entry_price: string
+  exit_price: string
+  pnl_usd: string
+  pnl_pct: string
+  duration_min: string
   exit_reason: string
-  type: string
+  order_id: string
 }
 
 export interface Portfolio {
   balance_1x: number
   balance_5x: number
   active_trades: Record<string, ActiveTrade>
-  history: HistoryEntry[]
+  history: unknown[]
   circuit_breaker: boolean
 }
 

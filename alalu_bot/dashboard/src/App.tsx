@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { openStream } from './api'
-import type { MarketSnapshot, Portfolio } from './types'
+import type { MarketSnapshot, Portfolio, TradeEntry } from './types'
 import Navbar from './components/Navbar'
 import MetricCard from './components/MetricCard'
 import MarketTable from './components/MarketTable'
@@ -11,15 +11,17 @@ const CAPITAL = 400
 export default function App() {
   const [market, setMarket] = useState<MarketSnapshot>({})
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null)
+  const [trades, setTrades] = useState<TradeEntry[]>([])
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
 
   useEffect(() => {
     const source = openStream(
-      ({ market: m, portfolio: p }) => {
+      ({ market: m, portfolio: p, trades: t }) => {
         setMarket(m)
         setPortfolio(p)
+        setTrades(t)
         setLastUpdated(new Date())
         setLoading(false)
         setError(false)
@@ -84,7 +86,7 @@ export default function App() {
               <div className="col-span-2">
                 <PositionsPanel
                   activeTrades={portfolio!.active_trades}
-                  history={portfolio!.history}
+                  trades={trades}
                   market={market}
                 />
               </div>

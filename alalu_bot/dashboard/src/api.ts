@@ -1,6 +1,6 @@
-import type { MarketSnapshot, Portfolio } from './types'
+import type { MarketSnapshot, Portfolio, TradeEntry } from './types'
 
-export type StreamPayload = { market: MarketSnapshot; portfolio: Portfolio }
+export type StreamPayload = { market: MarketSnapshot; portfolio: Portfolio; trades: TradeEntry[] }
 
 export function openStream(
   onData: (payload: StreamPayload) => void,
