@@ -349,6 +349,8 @@ def process_candle(symbol, ohlcv, portfolio, market_state, exchange_ref):
 
     save_json(market_state, STATE_FILE)
     save_json(portfolio, PORTFOLIO_FILE)
+    signal_str = market_state[symbol].get('signal') or '—'
+    print(f"🕯 {symbol} @ {float(price):.2f} | RSI={safe_float(rsi, decimals=1)} ADX={safe_float(adx, decimals=1)} | {signal_str}")
 
 
 # --- LOOPS ASYNC ---
