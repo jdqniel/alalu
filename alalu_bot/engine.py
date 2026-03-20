@@ -22,11 +22,13 @@ RSI_PERIOD = 14
 ADX_PERIOD = 14
 ATR_PERIOD = 14
 
+TIMEFRAME = '5m'
+
 TRAILING_PCT = 0.015
 INITIAL_SL_PCT = 0.015
-MAX_TRADE_MINUTES = 60
+MAX_TRADE_MINUTES = 120
 
-ADX_THRESH = 25
+ADX_THRESH = 20
 RSI_LONG_MIN = 50
 RSI_LONG_MAX = 70
 RSI_SHORT_MIN = 30
@@ -359,7 +361,7 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, lock):
     # Bootstrap: obtener historial via REST antes de escuchar WS
     buf = []
     try:
-        buf = await exchange.fetch_ohlcv(symbol, '1m', limit=120)
+        buf = await exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=120)
         print(f"📥 Bootstrap {symbol}: {len(buf)} velas")
     except Exception as e:
         print(f"Bootstrap error {symbol}: {e}")
@@ -368,7 +370,7 @@ async def watch_symbol_candles(exchange, symbol, portfolio, market_state, lock):
 
     while True:
         try:
-            candles = await exchange.watch_ohlcv(symbol, '1m')
+            candles = await exchange.watch_ohlcv(symbol, TIMEFRAME)
             if not candles:
                 continue
             # Actualizar buffer: reemplazar o agregar vela
